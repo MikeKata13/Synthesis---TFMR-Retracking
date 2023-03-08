@@ -3,6 +3,8 @@ from lxml import etree
 from shapely.geometry import Polygon, Point
 from osgeo import gdal
 import matplotlib.pyplot as plt
+import numpy as np
+import math
 
 # Function to read and parse the kml file and store the polygon coordinates
 def read_kml(kml_file):
@@ -23,7 +25,7 @@ def read_kml(kml_file):
 def is_point_in_mask(polygon_coords, point):
     polygon = Polygon(polygon_coords[0])
     return polygon.contains(Point(point))
-
+# Function to parse NC files
 def data_parsing(file):
     points=list()
     with netCDF4.Dataset(file, 'r') as nc:
@@ -40,19 +42,33 @@ def data_parsing(file):
 def elevation_map(file):    
     dataset=gdal.Open(file)
     # We store in different variables the different chromatic channels
-    band1 = dataset.GetRasterBand(1) # Monochrome channel
-    b1 = band1.ReadAsArray()
+    band1=dataset.GetRasterBand(1) # Monochrome channel
+    b1=band1.ReadAsArray()
     # Cropping to get only Greenland
-    b1=b1[8500:15000,6500:10000]
-    f = plt.figure()
+    b1=b1[8500:15000,6500:10000]    
+    figure=plt.figure()
     plt.imshow(b1,cmap='viridis')
     plt.colorbar()
     plt.title('Elevation Map')
     saved_image=plt.savefig(f'Elevation_Image_{file}.png')
     plt.close()
-    return b1
+    # Get latitude and longitude data
+    GT=dataset.GetGeoTransform()
+    y,x=dataset.RasterYSize,dataset.RasterXSize
+    # Calculate the x and y coordinatees of each pixel in the DEM file
+    x_geo_coords=GT[0]+np.arange(x)*GT[1]      # It's more concise than the way the gdal documentation does it
+    y_geo_coords=GT[3]+np.arange(y)*GT[5]
+    # Create a meshgrid
 
-def elevation_map2(file):
+    x_grid,y_grid=np.meshgrid(x_geo_coords,y_geo_coords)
+    x_grid,y_grid=x_grid[8500:15000,6500:10000], y_grid[8500:15000,6500:10000]
+    #Transformation from image coordinate space to georeferenced coordinate space:
+    lon_grid=GT[0]+x_grid*GT[1]+y_grid*GT[2]
+    lat_grid=GT[3]+x_grid*GT[4]+y_grid*GT[5]
+
+    return b1,x_grid,y_grid,lon_grid,lat_grid
+
+def elevation_map2(file):           # Alternative DEM elevation read function
     dataset = gdal.Open(file)
 
     # Get the geolocation information
@@ -79,4 +95,16 @@ def elevation_map2(file):
             elevation = elevation_array[row][col]
             x = x_origin + col * pixel_width
             y = y_origin + row * pixel_height
-            #print(f"Geolocation: ({x}, {y}), Elevation: {elevation}")
+
+# Calculate Earth Radius at certain points
+def earth_radius(point):
+    # Since Earth can be considered an oblate spheroid
+    a=6378.137*10**3    # Earth radius at the equator in meters
+    b=6356.7523*10**3   # Earth radius at the poles in meters
+    flat_coeff=(a-b)/a
+    e=math.sqrt(2*flat_coeff-flat_coeff**2)     # Eccentricity
+    x=math.radians(point[1])
+    y=math.radians(point[0])
+
+    R = math.sqrt((((a**2)*math.cos(point[0]))**2+((b**2)*math.sin(point[0]))**2)/((a*math.cos(point[0]))**2+(b*math.sin(point[0]))**2))
+    return R
